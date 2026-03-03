@@ -76,6 +76,34 @@ export function createAppHandler(app: BaseApp, options: Options): RequestHandler
 	};
 
 	return async (req, res, next, locals) => {
+		// First, create a lightweight request without socket listeners for route matching only
+		let requestForRouting: Request;
+		try {
+			requestForRouting = createRequest(req, {
+				allowedDomains: app.getAllowedDomains?.() ?? [],
+				skipAbortController: true,
+			});
+		} catch (err) {
+			logger.error(`Could not render ${req.url}`);
+			console.error(err);
+			res.statusCode = 500;
+			res.end('Internal Server Error');
+			return;
+		}
+
+		// Redirects are considered prerendered routes in static mode, but we want to
+		// handle them dynamically, so prerendered routes are included here.
+		const routeData = app.match(requestForRouting, true);
+		// But we still want to skip prerendered pages.
+		const willHandle = routeData && !(routeData.type === 'page' && routeData.prerender);
+
+		// If Astro won't handle this request and there's a next() callback, pass through immediately
+		// This avoids creating socket listeners for static files or other passthrough requests
+		if (!willHandle && next) {
+			return next();
+		}
+
+		// Now create the full request with AbortController and socket listeners for rendering
 		let request: Request;
 		try {
 			request = createRequest(req, {
@@ -89,11 +117,7 @@ export function createAppHandler(app: BaseApp, options: Options): RequestHandler
 			return;
 		}
 
-		// Redirects are considered prerendered routes in static mode, but we want to
-		// handle them dynamically, so prerendered routes are included here.
-		const routeData = app.match(request, true);
-		// But we still want to skip prerendered pages.
-		if (routeData && !(routeData.type === 'page' && routeData.prerender)) {
+		if (willHandle) {
 			const response = await als.run(request.url, () =>
 				app.render(request, {
 					addCookieHeader: true,
@@ -103,9 +127,8 @@ export function createAppHandler(app: BaseApp, options: Options): RequestHandler
 				}),
 			);
 			await writeResponse(response, res);
-		} else if (next) {
-			return next();
 		} else {
+			// No next() callback and no route match - render 404
 			const response = await app.render(request, {
 				addCookieHeader: true,
 				prerenderedErrorPageFetch,
