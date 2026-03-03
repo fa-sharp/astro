@@ -107,6 +107,7 @@ export function createRequest(
 
 	const request = new Request(url, options);
 
+	// Clean up any existing abort controller
 	const existingCleanup = getAbortControllerCleanup(req);
 	if (existingCleanup) {
 		existingCleanup();

@@ -60,9 +60,9 @@ describe('Socket listener leak prevention', () => {
 
 		try {
 			// Make multiple requests to a static page with keep-alive
-			for (let i = 0; i < 20; i++) {
+			for (let i = 0; i < 30; i++) {
 				const response = await fetch('http://localhost:8890', {
-					// agent,
+					agent,
 					headers: {
 						Connection: 'keep-alive',
 					},

@@ -80,7 +80,7 @@ export function createAppHandler(app: BaseApp, options: Options): RequestHandler
 		try {
 			request = createRequest(req, {
 				allowedDomains: app.getAllowedDomains?.() ?? [],
-				skipListeners: !!next, // if being used as middleware, defer setting up listeners / abort controller
+				skipListeners: !!next, // if being used as middleware, defer setting up the socket listeners / abort controller
 			});
 		} catch (err) {
 			logger.error(`Could not render ${req.url}`);
@@ -96,8 +96,8 @@ export function createAppHandler(app: BaseApp, options: Options): RequestHandler
 		// But we still want to skip prerendered pages.
 		const shouldRenderRoute = routeData && !(routeData.type === 'page' && routeData.prerender);
 
-		// If Astro won't handle this request and there's a next() callback, pass through immediately
-		// This avoids creating socket listeners for static files/pages and other passthrough requests
+		// If Astro won't handle this request and there's a next() callback, pass through immediately.
+		// This avoids adding unnecessary listeners for static files/pages and other passthrough requests.
 		if (!shouldRenderRoute && next) {
 			return next();
 		}
