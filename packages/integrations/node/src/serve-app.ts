@@ -76,12 +76,11 @@ export function createAppHandler(app: BaseApp, options: Options): RequestHandler
 	};
 
 	return async (req, res, next, locals) => {
-		// First, create a lightweight request without socket listeners for route matching only
-		let requestForRouting: Request;
+		let request: Request;
 		try {
-			requestForRouting = createRequest(req, {
+			request = createRequest(req, {
 				allowedDomains: app.getAllowedDomains?.() ?? [],
-				skipAbortController: true,
+				skipListeners: !!next, // if being used as middleware, defer setting up listeners / abort controller
 			});
 		} catch (err) {
 			logger.error(`Could not render ${req.url}`);
@@ -93,22 +92,24 @@ export function createAppHandler(app: BaseApp, options: Options): RequestHandler
 
 		// Redirects are considered prerendered routes in static mode, but we want to
 		// handle them dynamically, so prerendered routes are included here.
-		const routeData = app.match(requestForRouting, true);
+		const routeData = app.match(request, true);
 		// But we still want to skip prerendered pages.
-		const willHandle = routeData && !(routeData.type === 'page' && routeData.prerender);
+		const shouldRenderRoute = routeData && !(routeData.type === 'page' && routeData.prerender);
 
 		// If Astro won't handle this request and there's a next() callback, pass through immediately
-		// This avoids creating socket listeners for static files or other passthrough requests
-		if (!willHandle && next) {
+		// This avoids creating socket listeners for static files/pages and other passthrough requests
+		if (!shouldRenderRoute && next) {
 			return next();
 		}
 
-		// Now create the full request with AbortController and socket listeners for rendering
-		let request: Request;
 		try {
-			request = createRequest(req, {
-				allowedDomains: app.getAllowedDomains?.() ?? [],
-			});
+			// For middleware requests, now create the full request with AbortController and socket listeners
+			if (next) {
+				request = createRequest(req, {
+					allowedDomains: app.getAllowedDomains?.() ?? [],
+					skipListeners: false,
+				});
+			}
 		} catch (err) {
 			logger.error(`Could not render ${req.url}`);
 			console.error(err);
@@ -117,7 +118,7 @@ export function createAppHandler(app: BaseApp, options: Options): RequestHandler
 			return;
 		}
 
-		if (willHandle) {
+		if (shouldRenderRoute) {
 			const response = await als.run(request.url, () =>
 				app.render(request, {
 					addCookieHeader: true,
@@ -128,7 +129,7 @@ export function createAppHandler(app: BaseApp, options: Options): RequestHandler
 			);
 			await writeResponse(response, res);
 		} else {
-			// No next() callback and no route match - render 404
+			// No rendered route and no next() callback - render 404
 			const response = await app.render(request, {
 				addCookieHeader: true,
 				prerenderedErrorPageFetch,

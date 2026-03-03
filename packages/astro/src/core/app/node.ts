@@ -39,14 +39,16 @@ export function createRequest(
 	{
 		skipBody = false,
 		allowedDomains = [],
-		skipAbortController = false,
+		skipListeners = false,
 	}: {
 		skipBody?: boolean;
 		allowedDomains?: Partial<RemotePattern>[];
-		skipAbortController?: boolean;
+		/** Whether to skip setting up AbortController and socket listeners
+		 * (e.g. for requests that may be passed through to another handler). */
+		skipListeners?: boolean;
 	} = {},
 ): Request {
-	const controller = skipAbortController ? null : new AbortController();
+	const controller = skipListeners ? null : new AbortController();
 
 	const isEncrypted = 'encrypted' in req.socket && req.socket.encrypted;
 
@@ -105,46 +107,45 @@ export function createRequest(
 
 	const request = new Request(url, options);
 
-	// Only set up socket listeners if we're not skipping abort controller setup
-	if (!skipAbortController && controller) {
-		const socket = getRequestSocket(req);
-		if (socket && typeof socket.on === 'function') {
-			const existingCleanup = getAbortControllerCleanup(req);
-			if (existingCleanup) {
-				existingCleanup();
+	const existingCleanup = getAbortControllerCleanup(req);
+	if (existingCleanup) {
+		existingCleanup();
+	}
+
+	// Set up abort controller and socket listeners if enabled
+	const socket = getRequestSocket(req);
+	if (controller && socket && typeof socket.on === 'function') {
+		let cleanedUp = false;
+
+		const removeSocketListener = () => {
+			if (typeof socket.off === 'function') {
+				socket.off('close', onSocketClose);
+			} else if (typeof socket.removeListener === 'function') {
+				socket.removeListener('close', onSocketClose);
 			}
-			let cleanedUp = false;
+		};
 
-			const removeSocketListener = () => {
-				if (typeof socket.off === 'function') {
-					socket.off('close', onSocketClose);
-				} else if (typeof socket.removeListener === 'function') {
-					socket.removeListener('close', onSocketClose);
-				}
-			};
+		const cleanup = () => {
+			if (cleanedUp) return;
+			cleanedUp = true;
+			removeSocketListener();
+			controller.signal.removeEventListener('abort', cleanup);
+			Reflect.deleteProperty(req, nodeRequestAbortControllerCleanupSymbol);
+		};
 
-			const cleanup = () => {
-				if (cleanedUp) return;
-				cleanedUp = true;
-				removeSocketListener();
-				controller.signal.removeEventListener('abort', cleanup);
-				Reflect.deleteProperty(req, nodeRequestAbortControllerCleanupSymbol);
-			};
-
-			const onSocketClose = () => {
-				cleanup();
-				if (!controller.signal.aborted) {
-					controller.abort();
-				}
-			};
-
-			socket.on('close', onSocketClose);
-			controller.signal.addEventListener('abort', cleanup, { once: true });
-			Reflect.set(req, nodeRequestAbortControllerCleanupSymbol, cleanup);
-
-			if (socket.destroyed) {
-				onSocketClose();
+		const onSocketClose = () => {
+			cleanup();
+			if (!controller.signal.aborted) {
+				controller.abort();
 			}
+		};
+
+		socket.on('close', onSocketClose);
+		controller.signal.addEventListener('abort', cleanup, { once: true });
+		Reflect.set(req, nodeRequestAbortControllerCleanupSymbol, cleanup);
+
+		if (socket.destroyed) {
+			onSocketClose();
 		}
 	}
 
